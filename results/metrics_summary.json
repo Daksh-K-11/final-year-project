@@ -1,0 +1,40 @@
+{
+    "Linear Regression": {
+        "MAE": 15.508,
+        "RMSE": 20.073,
+        "R2_Score": 0.7005,
+        "MAPE": 12.06,
+        "AQI_Category_Accuracy": 76.51
+    },
+    "Random Forest": {
+        "MAE": 12.768,
+        "RMSE": 16.594,
+        "R2_Score": 0.7953,
+        "MAPE": 9.87,
+        "AQI_Category_Accuracy": 78.14
+    },
+    "LSTM": {
+        "MAE": 12.005,
+        "RMSE": 15.582,
+        "R2_Score": 0.8195,
+        "MAPE": 9.29,
+        "AQI_Category_Accuracy": 78.06,
+        "Train_Time_Sec": 72.01
+    },
+    "BiLSTM-Attention": {
+        "MAE": 12.089,
+        "RMSE": 15.801,
+        "R2_Score": 0.8144,
+        "MAPE": 9.38,
+        "AQI_Category_Accuracy": 77.75,
+        "Train_Time_Sec": 194.68
+    },
+    "Transformer": {
+        "MAE": 12.836,
+        "RMSE": 16.979,
+        "R2_Score": 0.7857,
+        "MAPE": 9.95,
+        "AQI_Category_Accuracy": 78.84,
+        "Train_Time_Sec": 241.62
+    }
+}
