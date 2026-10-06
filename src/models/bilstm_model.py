@@ -54,7 +54,8 @@ class AirQualityBiLSTMAttention(nn.Module):
         self.attention = TemporalAttention(hidden_dim * 2)
         self.dropout = nn.Dropout(dropout)
         
-        self.fc1 = nn.Linear(hidden_dim * 2, 64)
+        # Combine immediate sequence recency with global attention context
+        self.fc1 = nn.Linear(hidden_dim * 4, 64)
         self.layer_norm = nn.LayerNorm(64)
         self.fc2 = nn.Linear(64, output_dim)
         
@@ -62,10 +63,13 @@ class AirQualityBiLSTMAttention(nn.Module):
         # x: (batch_size, seq_len, input_dim)
         lstm_out, _ = self.bilstm(x)  # (batch_size, seq_len, hidden_dim * 2)
         context, attn_weights = self.attention(lstm_out)  # (batch_size, hidden_dim * 2)
+        last_step = lstm_out[:, -1, :]  # (batch_size, hidden_dim * 2)
+        combined = torch.cat([last_step, context], dim=-1)  # (batch_size, hidden_dim * 4)
         
-        out = self.dropout(context)
+        out = self.dropout(combined)
         out = F.gelu(self.layer_norm(self.fc1(out)))
         out = self.fc2(out)
         
         # Return prediction and attention weights for interpretability
         return (out.squeeze(-1) if out.shape[-1] == 1 else out), attn_weights
+

@@ -8,13 +8,15 @@ from typing import Tuple, List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from src.aqi_calculator import calculate_overall_aqi
 
 FEATURE_COLUMNS = [
+    'aqi', 'aqi_rolling_mean_3h', 'aqi_rolling_mean_24h', 'aqi_diff_1h',
     'pm25', 'pm10', 'no2', 'so2', 'co', 'o3',
     'temperature', 'humidity', 'wind_speed',
     'hour_sin', 'hour_cos', 'month_sin', 'month_cos', 'dow_sin', 'dow_cos',
     'pm25_rolling_mean_3h', 'pm25_rolling_mean_24h', 'pm10_rolling_mean_3h',
-    'pm25_diff_1h', 'temp_humidity_interaction'
+    'pm25_diff_1h', 'temp_humidity_interaction', 'ventilation_index', 'pm_ratio'
 ]
 
 TARGET_COLUMN = 'aqi'
@@ -69,6 +71,26 @@ class AirQualityPreprocessor:
         """
         df_feat = df.copy()
         
+        # If AQI not in dataframe (e.g. streaming telemetry), compute instantaneous AQI
+        if 'aqi' not in df_feat.columns:
+            calc_aqis = []
+            for _, row in df_feat.iterrows():
+                pols = {
+                    'PM2.5': row.get('pm25', 40.0),
+                    'PM10': row.get('pm10', 80.0),
+                    'NO2': row.get('no2', 30.0),
+                    'SO2': row.get('so2', 12.0),
+                    'CO': row.get('co', 1.0),
+                    'O3': row.get('o3', 35.0)
+                }
+                calc_aqis.append(calculate_overall_aqi(pols)[0])
+            df_feat['aqi'] = calc_aqis
+        
+        # Autoregressive historical AQI trends
+        df_feat['aqi_rolling_mean_3h'] = df_feat['aqi'].rolling(window=3, min_periods=1).mean()
+        df_feat['aqi_rolling_mean_24h'] = df_feat['aqi'].rolling(window=24, min_periods=1).mean()
+        df_feat['aqi_diff_1h'] = df_feat['aqi'].diff().fillna(0)
+        
         if 'timestamp' in df_feat.columns:
             ts = pd.to_datetime(df_feat['timestamp'])
             hour = ts.dt.hour
@@ -95,8 +117,10 @@ class AirQualityPreprocessor:
         # First difference / rate of change
         df_feat['pm25_diff_1h'] = df_feat['pm25'].diff().fillna(0)
         
-        # Domain Interaction: Temperature & Humidity hygroscopic particulate growth factor
+        # Domain Interactions
         df_feat['temp_humidity_interaction'] = (df_feat['temperature'] * df_feat['humidity']) / 100.0
+        df_feat['ventilation_index'] = df_feat['wind_speed'] * df_feat['temperature']
+        df_feat['pm_ratio'] = df_feat['pm25'] / (df_feat['pm10'] + 1e-4)
         
         return df_feat
 

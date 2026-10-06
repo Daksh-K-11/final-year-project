@@ -54,11 +54,12 @@ class AirQualityTransformer(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
+        # Dual representation head: immediate sequence recency + global self-attention pooling
         self.head = nn.Sequential(
-            nn.Linear(d_model, 32),
+            nn.Linear(d_model * 2, 48),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(32, output_dim)
+            nn.Linear(48, output_dim)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -67,8 +68,11 @@ class AirQualityTransformer(nn.Module):
         x_pos = self.pos_encoder(x_emb)
         encoded = self.transformer_encoder(x_pos)  # (batch_size, seq_len, d_model)
         
-        # Mean pooling across the sequence dimension
+        # Dual aggregation: recency token at t and global sequence pooling
         pooled = torch.mean(encoded, dim=1)  # (batch_size, d_model)
-        out = self.head(pooled)
+        last_step = encoded[:, -1, :]  # (batch_size, d_model)
+        combined = torch.cat([last_step, pooled], dim=-1)  # (batch_size, d_model * 2)
         
+        out = self.head(combined)
         return out.squeeze(-1) if out.shape[-1] == 1 else out
+

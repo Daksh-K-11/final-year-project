@@ -7,6 +7,8 @@ Evaluates model robustness against:
 """
 
 import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import json
 from typing import Dict, Any, List
 import numpy as np
@@ -22,6 +24,7 @@ from src.data_preprocessor import AirQualityPreprocessor
 from src.models.lstm_model import AirQualityLSTM
 from src.models.bilstm_model import AirQualityBiLSTMAttention
 from src.models.transformer_model import AirQualityTransformer
+from src.models.ensemble_model import AirQualityEnsemble
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 def evaluate_sensor_noise_robustness(
@@ -45,22 +48,26 @@ def evaluate_sensor_noise_robustness(
             X_noisy = X_test_base.copy()
             
         for model_name, model in models_dict.items():
-            model.eval()
-            with torch.no_grad():
-                inputs = torch.tensor(X_noisy, dtype=torch.float32)
-                outputs = model(inputs)
-                if isinstance(outputs, tuple):
-                    outputs = outputs[0]
-                preds_scaled = outputs.cpu().numpy().reshape(-1, 1)
-                preds = preprocessor.inverse_transform_target(preds_scaled).flatten()
-                
-                mae = mean_absolute_error(y_test_actual, preds)
-                rmse = np.sqrt(mean_squared_error(y_test_actual, preds))
-                r2 = r2_score(y_test_actual, preds)
-                
-                results[model_name]['rmse'].append(round(float(rmse), 2))
-                results[model_name]['r2'].append(round(float(r2), 4))
-                results[model_name]['mae'].append(round(float(mae), 2))
+            inputs = torch.tensor(X_noisy, dtype=torch.float32)
+            if isinstance(model, AirQualityEnsemble) or hasattr(model, 'predict_components'):
+                outputs, _ = model.predict(inputs, mode="stacking", device="cpu")
+                preds_scaled = np.array(outputs).reshape(-1, 1)
+            else:
+                model.eval()
+                with torch.no_grad():
+                    outputs = model(inputs)
+                    if isinstance(outputs, tuple):
+                        outputs = outputs[0]
+                    preds_scaled = outputs.cpu().numpy().reshape(-1, 1)
+            preds = preprocessor.inverse_transform_target(preds_scaled).flatten()
+            
+            mae = mean_absolute_error(y_test_actual, preds)
+            rmse = np.sqrt(mean_squared_error(y_test_actual, preds))
+            r2 = r2_score(y_test_actual, preds)
+            
+            results[model_name]['rmse'].append(round(float(rmse), 2))
+            results[model_name]['r2'].append(round(float(r2), 4))
+            results[model_name]['mae'].append(round(float(mae), 2))
                 
     return results
 
@@ -94,16 +101,20 @@ def evaluate_missing_telemetry_stress(
         y_actual = prep.inverse_transform_target(y_test.reshape(-1, 1)).flatten()
         
         for model_name, model in models_dict.items():
-            model.eval()
-            with torch.no_grad():
-                inputs = torch.tensor(X_test, dtype=torch.float32)
-                outputs = model(inputs)
-                if isinstance(outputs, tuple):
-                    outputs = outputs[0]
-                preds_scaled = outputs.cpu().numpy().reshape(-1, 1)
-                preds = prep.inverse_transform_target(preds_scaled).flatten()
-                rmse = np.sqrt(mean_squared_error(y_actual, preds))
-                results['models'][model_name].append(round(float(rmse), 2))
+            inputs = torch.tensor(X_test, dtype=torch.float32)
+            if isinstance(model, AirQualityEnsemble) or hasattr(model, 'predict_components'):
+                outputs, _ = model.predict(inputs, mode="stacking", device="cpu")
+                preds_scaled = np.array(outputs).reshape(-1, 1)
+            else:
+                model.eval()
+                with torch.no_grad():
+                    outputs = model(inputs)
+                    if isinstance(outputs, tuple):
+                        outputs = outputs[0]
+                    preds_scaled = outputs.cpu().numpy().reshape(-1, 1)
+            preds = prep.inverse_transform_target(preds_scaled).flatten()
+            rmse = np.sqrt(mean_squared_error(y_actual, preds))
+            results['models'][model_name].append(round(float(rmse), 2))
                 
     return results
 
@@ -143,20 +154,24 @@ def evaluate_seasonal_variations(
         season_metrics[s_name] = {}
         
         for m_name, model in models_dict.items():
-            model.eval()
-            with torch.no_grad():
-                inputs = torch.tensor(X_seq, dtype=torch.float32)
-                outputs = model(inputs)
-                if isinstance(outputs, tuple):
-                    outputs = outputs[0]
-                preds_scaled = outputs.cpu().numpy().reshape(-1, 1)
-                preds = preprocessor.inverse_transform_target(preds_scaled).flatten()
-                rmse = np.sqrt(mean_squared_error(y_act, preds))
-                r2 = r2_score(y_act, preds)
-                season_metrics[s_name][m_name] = {
-                    'RMSE': round(float(rmse), 2),
-                    'R2': round(float(r2), 4)
-                }
+            inputs = torch.tensor(X_seq, dtype=torch.float32)
+            if isinstance(model, AirQualityEnsemble) or hasattr(model, 'predict_components'):
+                outputs, _ = model.predict(inputs, mode="stacking", device="cpu")
+                preds_scaled = np.array(outputs).reshape(-1, 1)
+            else:
+                model.eval()
+                with torch.no_grad():
+                    outputs = model(inputs)
+                    if isinstance(outputs, tuple):
+                        outputs = outputs[0]
+                    preds_scaled = outputs.cpu().numpy().reshape(-1, 1)
+            preds = preprocessor.inverse_transform_target(preds_scaled).flatten()
+            rmse = np.sqrt(mean_squared_error(y_act, preds))
+            r2 = r2_score(y_act, preds)
+            season_metrics[s_name][m_name] = {
+                'RMSE': round(float(rmse), 2),
+                'R2': round(float(r2), 4)
+            }
                 
     return season_metrics
 
@@ -204,13 +219,24 @@ def run_failure_mode_analysis_suite(
         else:
             print(f"Warning: Checkpoint {ckpt} not found. Running initialized model.")
             
+    # Add Hybrid Ensemble
+    ensemble = AirQualityEnsemble(input_dim=input_dim)
+    ensemble.bilstm = models['BiLSTM-Attention']
+    ensemble.transformer = models['Transformer']
+    ensemble.lstm = models['LSTM']
+    ensemble.load_base_weights(models_dir)
+    ensemble_cfg = os.path.join(models_dir, "ensemble_config.json")
+    if os.path.exists(ensemble_cfg):
+        ensemble.load(ensemble_cfg)
+    models['Hybrid Ensemble'] = ensemble
+            
     # 1. Sensor Noise Stress Test
     print("[Stress Test 1] Evaluating Sensor Noise Perturbation...")
     noise_res = evaluate_sensor_noise_robustness(models, preprocessor, X_test, y_test_actual)
     
     # Plot Noise Stress
     plt.figure(figsize=(10, 5))
-    palette = {'LSTM': '#1f77b4', 'BiLSTM-Attention': '#2ca02c', 'Transformer': '#9467bd'}
+    palette = {'LSTM': '#1f77b4', 'BiLSTM-Attention': '#2ca02c', 'Transformer': '#9467bd', 'Hybrid Ensemble': '#e11d48'}
     for m_name, vals in noise_res.items():
         plt.plot(vals['noise_levels'], vals['rmse'], marker='o', linewidth=2.4, label=m_name, color=palette.get(m_name, '#333333'))
     plt.title("Sensor Noise Stress Analysis: Prediction RMSE vs Gaussian Noise Perturbation (σ)", fontsize=13, fontweight='bold')

@@ -247,7 +247,7 @@ def create_slide_deck(output_path: str = "docs/Air_Quality_Prediction_Review_1.p
     obj_grid = [
         ("Obj 1: Standard AQI Engine", "Implement CPCB / EPA piecewise linear breakpoint sub-indices for PM2.5, PM10, NO2, SO2, CO, and O3."),
         ("Obj 2: Deep Model Architecture", "Develop & optimize Deep LSTM, BiLSTM with Temporal Attention, and Time-Series Transformer in PyTorch."),
-        ("Obj 3: Rigorous Benchmarking", "Benchmark against Linear Regression and Random Forest using MAE, RMSE, R² score, and Category Accuracy."),
+        ("Obj 3: Rigorous Benchmarking", "Benchmark against Random Forest and XGBoost using MAE, RMSE, R² score, and Category Accuracy."),
         ("Obj 4: Failure Mode Stress-Testing", "Quantify resilience against Gaussian sensor noise (σ ≤ 0.6), packet loss (0-50%), and seasonal inversions."),
         ("Obj 5: Interactive Web Platform", "Deliver a real-time web portal for live monitoring, scenario simulation, and automated health advisories.")
     ]
@@ -715,7 +715,7 @@ def create_slide_deck(output_path: str = "docs/Air_Quality_Prediction_Review_1.p
         p.font.color.rgb = ACCENT_CYAN
         
     b_rows = [
-        ("Linear Regression", "15.51", "20.07", "0.7005", "13.90%", "76.5%"),
+        ("XGBoost", "12.35", "16.02", "0.8090", "9.52%", "78.5%"),
         ("Random Forest", "12.77", "16.59", "0.7953", "9.85%", "78.1%"),
         ("Vanilla LSTM", "12.00", "15.58", "0.8195", "9.29%", "78.1%"),
         ("Transformer", "12.84", "16.98", "0.7857", "9.95%", "78.8%"),

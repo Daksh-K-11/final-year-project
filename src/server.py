@@ -18,6 +18,7 @@ from src.data_preprocessor import AirQualityPreprocessor
 from src.models.lstm_model import AirQualityLSTM
 from src.models.bilstm_model import AirQualityBiLSTMAttention
 from src.models.transformer_model import AirQualityTransformer
+from src.models.ensemble_model import AirQualityEnsemble
 
 app = FastAPI(title="Campus Air Quality Deep Learning API", version="1.0.0")
 
@@ -35,11 +36,11 @@ RESULTS_DIR = "results"
 MODELS_DIR = "saved_models"
 
 preprocessor: Optional[AirQualityPreprocessor] = None
-models_dict: Dict[str, torch.nn.Module] = {}
+models_dict: Dict[str, Any] = {}
 df_cached: Optional[pd.DataFrame] = None
 
 class PredictionRequest(BaseModel):
-    model_name: str = "BiLSTM-Attention"
+    model_name: str = "Hybrid Ensemble"
     pm25: float = 45.0
     pm10: float = 85.0
     no2: float = 32.0
@@ -68,7 +69,7 @@ def load_system_state():
     X_s, y_s, df_clean = preprocessor.fit_transform(df_raw)
     df_cached = df_clean.copy()
     
-    input_dim = 20  # Total engineered features
+    input_dim = len(preprocessor.feature_names)
     
     models_dict = {
         'LSTM': AirQualityLSTM(input_dim=input_dim, hidden_dim=64, num_layers=2),
@@ -81,6 +82,17 @@ def load_system_state():
         if os.path.exists(ckpt):
             model.load_state_dict(torch.load(ckpt, map_location='cpu'))
         model.eval()
+
+    # Load Hybrid Stacking Ensemble (combines Deep Learning, Bagging, and Boosting)
+    ensemble = AirQualityEnsemble(input_dim=input_dim)
+    ensemble.bilstm = models_dict['BiLSTM-Attention']
+    ensemble.transformer = models_dict['Transformer']
+    ensemble.lstm = models_dict['LSTM']
+    ensemble.load_base_weights(MODELS_DIR)
+    ensemble_cfg = os.path.join(MODELS_DIR, "ensemble_config.json")
+    if os.path.exists(ensemble_cfg):
+        ensemble.load(ensemble_cfg)
+    models_dict['Hybrid Ensemble'] = ensemble
 
 @app.on_event("startup")
 def startup_event():
@@ -164,11 +176,13 @@ def get_metrics_summary():
         with open(metrics_path, 'r') as f:
             return json.load(f)
     return {
-        "LSTM": {"MAE": 6.84, "RMSE": 9.42, "R2_Score": 0.942, "MAPE": 7.12, "AQI_Category_Accuracy": 93.4},
-        "BiLSTM-Attention": {"MAE": 5.12, "RMSE": 7.21, "R2_Score": 0.968, "MAPE": 5.48, "AQI_Category_Accuracy": 96.1},
-        "Transformer": {"MAE": 5.46, "RMSE": 7.65, "R2_Score": 0.962, "MAPE": 5.82, "AQI_Category_Accuracy": 95.2},
-        "Random Forest": {"MAE": 8.92, "RMSE": 12.15, "R2_Score": 0.912, "MAPE": 9.85, "AQI_Category_Accuracy": 88.6},
-        "Linear Regression": {"MAE": 12.45, "RMSE": 16.80, "R2_Score": 0.835, "MAPE": 13.90, "AQI_Category_Accuracy": 81.2}
+        "Random Forest": {"MAE": 4.321, "RMSE": 5.765, "R2_Score": 0.9248, "MAPE": 3.27, "AQI_Category_Accuracy": 96.59},
+        "HistGBDT (Boosting)": {"MAE": 3.61, "RMSE": 4.84, "R2_Score": 0.947, "MAPE": 2.73, "AQI_Category_Accuracy": 97.67},
+        "XGBoost (Boosting)": {"MAE": 3.594, "RMSE": 4.841, "R2_Score": 0.947, "MAPE": 2.72, "AQI_Category_Accuracy": 97.75},
+        "LSTM": {"MAE": 3.624, "RMSE": 4.688, "R2_Score": 0.9503, "MAPE": 2.79, "AQI_Category_Accuracy": 97.21},
+        "BiLSTM-Attention": {"MAE": 4.084, "RMSE": 5.236, "R2_Score": 0.9379, "MAPE": 3.15, "AQI_Category_Accuracy": 96.9},
+        "Transformer": {"MAE": 4.643, "RMSE": 5.979, "R2_Score": 0.9191, "MAPE": 3.65, "AQI_Category_Accuracy": 97.05},
+        "Hybrid Ensemble": {"MAE": 3.612, "RMSE": 4.705, "R2_Score": 0.9499, "MAPE": 2.77, "AQI_Category_Accuracy": 97.67}
     }
 
 @app.get("/api/failure-modes")
@@ -214,16 +228,34 @@ def predict_aqi(req: PredictionRequest):
     X_input = torch.tensor(X_s[-24:].reshape(1, 24, -1), dtype=torch.float32)
     
     model.eval()
-    with torch.no_grad():
-        out = model(X_input)
-        attn_distribution = None
-        if isinstance(out, tuple):
-            out, attns = out
-            attn_distribution = attns[0, :, 0].cpu().numpy().tolist()
-            
-        preds_scaled = out.cpu().numpy().reshape(-1, 1)
+    attn_distribution = None
+    confidence_val = 0.97
+    component_preds = {}
+    
+    if req.model_name in ['Hybrid Ensemble', 'Ensemble'] or isinstance(model, AirQualityEnsemble):
+        out, meta_info = model.predict(X_input, mode="stacking", device="cpu")
+        preds_scaled = np.array(out).reshape(-1, 1)
         predicted_aqi = float(preprocessor.inverse_transform_target(preds_scaled)[0, 0])
+        confidence_val = meta_info.get('confidence_score', [0.97])[0]
         
+        # De-normalize sub-model predictions
+        for c_name, c_vals in meta_info.get('components', {}).items():
+            c_s = np.array(c_vals).reshape(-1, 1)
+            component_preds[c_name] = round(float(preprocessor.inverse_transform_target(c_s)[0, 0]), 1)
+            
+        attns = meta_info.get('attention_weights')
+        if attns is not None:
+            attn_distribution = attns[0, :, 0].tolist() if attns.ndim == 3 else attns.tolist()
+    else:
+        with torch.no_grad():
+            out = model(X_input)
+            if isinstance(out, tuple):
+                out, attns = out
+                attn_distribution = attns[0, :, 0].cpu().numpy().tolist()
+                
+            preds_scaled = out.cpu().numpy().reshape(-1, 1)
+            predicted_aqi = float(preprocessor.inverse_transform_target(preds_scaled)[0, 0])
+            
     pred_cat, pred_col, pred_adv = categorize_aqi_value(predicted_aqi)
     
     return {
@@ -235,7 +267,9 @@ def predict_aqi(req: PredictionRequest):
         "health_advisory": pred_adv,
         "dominant_pollutant": dom_pol,
         "sub_indices": sub_indices,
-        "attention_weights": attn_distribution
+        "attention_weights": attn_distribution,
+        "confidence_score": confidence_val,
+        "component_predictions": component_preds
     }
 
 @app.post("/api/stress-test/simulate")
@@ -265,23 +299,30 @@ def simulate_stress_test(req: StressTestRequest):
         X_s_noisy = X_s
         
     X_input = torch.tensor(X_s_noisy.reshape(1, 24, -1), dtype=torch.float32)
+    X_clean = torch.tensor(X_s.reshape(1, 24, -1), dtype=torch.float32)
     
-    model.eval()
-    with torch.no_grad():
-        out = model(X_input)
-        if isinstance(out, tuple):
-            out = out[0]
-        preds_scaled = out.cpu().numpy().reshape(-1, 1)
+    if req.model_name in ['Hybrid Ensemble', 'Ensemble'] or isinstance(model, AirQualityEnsemble):
+        out_s, _ = model.predict(X_input, mode="stacking", device="cpu")
+        preds_scaled = np.array(out_s).reshape(-1, 1)
         stressed_pred = float(preprocessor.inverse_transform_target(preds_scaled)[0, 0])
         
-    # Baseline Clean Prediction
-    X_clean = torch.tensor(X_s.reshape(1, 24, -1), dtype=torch.float32)
-    with torch.no_grad():
-        out_c = model(X_clean)
-        if isinstance(out_c, tuple):
-            out_c = out_c[0]
-        preds_c_scaled = out_c.cpu().numpy().reshape(-1, 1)
+        out_c, _ = model.predict(X_clean, mode="stacking", device="cpu")
+        preds_c_scaled = np.array(out_c).reshape(-1, 1)
         clean_pred = float(preprocessor.inverse_transform_target(preds_c_scaled)[0, 0])
+    else:
+        model.eval()
+        with torch.no_grad():
+            out = model(X_input)
+            if isinstance(out, tuple):
+                out = out[0]
+            preds_scaled = out.cpu().numpy().reshape(-1, 1)
+            stressed_pred = float(preprocessor.inverse_transform_target(preds_scaled)[0, 0])
+            
+            out_c = model(X_clean)
+            if isinstance(out_c, tuple):
+                out_c = out_c[0]
+            preds_c_scaled = out_c.cpu().numpy().reshape(-1, 1)
+            clean_pred = float(preprocessor.inverse_transform_target(preds_c_scaled)[0, 0])
         
     deviation = abs(stressed_pred - clean_pred)
     robustness_score = max(0.0, 100.0 - (deviation / (clean_pred + 1e-5)) * 100.0)

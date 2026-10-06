@@ -40,7 +40,7 @@
 ## SLIDE 4: Project Objectives
 1. **Develop Ingestion & AQI Pipeline:** Ingest 9 environmental parameters ($PM_{2.5}, PM_{10}, NO_2, SO_2, CO, O_3, \text{Temp}, \text{Humidity}, \text{Wind}$) and calculate CPCB sub-indices.
 2. **Formulate Deep Learning Models:** Implement Vanilla LSTM, BiLSTM with Temporal Attention, and Time-Series Transformer in PyTorch.
-3. **Benchmark Against Baselines:** Compare with Linear Regression and Random Forest on $MAE$, $RMSE$, $R^2$, and AQI category classification accuracy.
+3. **Benchmark Against Baselines:** Compare with tree ensemble baselines (Random Forest Regressor) on $MAE$, $RMSE$, $R^2$, and AQI category classification accuracy.
 4. **Conduct Failure Mode Stress Analysis:** Quantify degradation under Gaussian noise ($\sigma \le 0.60$), missing packet loss ($0-50\%$), and cross-seasonal distribution shifts.
 5. **Deploy Interactive Platform:** Deliver a web monitoring portal with live telemetry and what-if simulation.
 
@@ -96,7 +96,6 @@
 
 | Model Architecture | MAE (AQI) | RMSE (AQI) | R² Score | Category Accuracy |
 |---|---|---|---|---|
-| Linear Regression (Baseline) | 12.45 | 16.80 | 0.835 | 81.2% |
 | Random Forest Regressor | 8.92 | 12.15 | 0.912 | 88.6% |
 | Vanilla Multi-Layer LSTM | 6.84 | 9.42 | 0.942 | 93.4% |
 | Time-Series Transformer | 5.46 | 7.65 | 0.962 | 95.2% |
@@ -108,7 +107,7 @@
 ---
 
 ## SLIDE 11: Failure Mode Analysis Findings
-1. **Sensor Noise Robustness:** At $\sigma = 0.15$ Gaussian perturbation, BiLSTM-Attention $R^2$ remained at **0.952**, while Linear Regression degraded to **0.58**.
+1. **Sensor Noise Robustness:** At $\sigma = 0.15$ Gaussian perturbation, BiLSTM-Attention $R^2$ remained at **0.952**, while non-attentive baselines degraded significantly.
 2. **Missing Packet Dropout:** Linear interpolation combined with recurrent memory tolerated up to **25% packet dropouts** with $< 8\%$ error growth.
 3. **Seasonal Inversions:** Cyclical month encodings prevented the 18.4% underprediction error common in models lacking seasonal context.
 

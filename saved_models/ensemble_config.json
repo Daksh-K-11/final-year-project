@@ -1,0 +1,20 @@
+{
+    "input_dim": 26,
+    "weights": {
+        "BiLSTM-Attention": 0.2983,
+        "Transformer": 0.0089,
+        "LSTM": 0.6788,
+        "Random Forest": 0.0,
+        "Gradient Boosting": 0.014
+    },
+    "is_meta_fitted": true,
+    "meta_alpha": 0.5623413251903491,
+    "meta_coef": [
+        0.20734754290867427,
+        0.13317735718509557,
+        0.5928194853462126,
+        -0.09561903624375546,
+        0.1703331705003384
+    ],
+    "meta_intercept": -0.01655496888372221
+}

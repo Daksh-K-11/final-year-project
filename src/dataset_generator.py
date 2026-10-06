@@ -66,29 +66,40 @@ def generate_campus_iot_dataset(
     is_winter = df['month'].isin([11, 12, 1, 2]).astype(float)
     inversion_factor = 1.0 + 0.75 * is_winter - 0.25 * (df['wind_speed'] / 5.0)
     
-    # PM2.5 (Fine Particulate Matter)
+    # PM2.5 (Fine Particulate Matter) with atmospheric persistence (advection-diffusion continuity)
     base_pm25 = (28.0 + 45.0 * df['campus_activity_index']) * inversion_factor
     pm25_rain_washout = (df['humidity'] > 85).astype(float) * 0.45
-    pm25_noise = np.random.normal(0, base_pm25 * noise_level)
-    df['pm25'] = np.clip((base_pm25 * (1.0 - pm25_rain_washout)) + pm25_noise, 5.0, 480.0)
+    pm25_target = base_pm25 * (1.0 - pm25_rain_washout)
     
-    # PM10 (Coarse Particulate Matter: ~1.6 - 2.2x of PM2.5 + dust during dry/windy days)
-    dust_factor = (df['wind_speed'] > 5.0).astype(float) * 15.0
-    pm10_noise = np.random.normal(0, 10.0, total_hours)
-    df['pm10'] = np.clip(df['pm25'] * np.random.uniform(1.5, 2.0, total_hours) + dust_factor + pm10_noise, 10.0, 650.0)
+    pm25_series = np.zeros(total_hours)
+    pm25_series[0] = pm25_target.iloc[0]
+    for t in range(1, total_hours):
+        # Physical fluid persistence (alpha=0.78) driven by emission source + calibrated sensor jitter
+        pm25_series[t] = 0.78 * pm25_series[t-1] + 0.22 * pm25_target.iloc[t] + np.random.normal(0, 1.2)
+    df['pm25'] = np.clip(pm25_series, 5.0, 480.0)
     
-    # NO2 (Nitrogen Dioxide: strictly tied to vehicular emission & bus transit)
-    df['no2'] = np.clip((15.0 + 40.0 * df['campus_activity_index'] * inversion_factor) + np.random.normal(0, 4.0, total_hours), 4.0, 220.0)
+    # PM10 (Coarse Particulate Matter with smooth meteorological dynamics)
+    dust_factor = (df['wind_speed'] > 5.0).astype(float) * 12.0
+    pm10_series = np.zeros(total_hours)
+    pm10_series[0] = df['pm25'].iloc[0] * 1.75
+    for t in range(1, total_hours):
+        ratio = 1.75 + 0.12 * np.sin(2 * np.pi * df['hour'].iloc[t] / 24)
+        target_pm10 = df['pm25'].iloc[t] * ratio + dust_factor.iloc[t]
+        pm10_series[t] = 0.78 * pm10_series[t-1] + 0.22 * target_pm10 + np.random.normal(0, 2.0)
+    df['pm10'] = np.clip(pm10_series, 10.0, 650.0)
     
-    # SO2 (Sulfur Dioxide: lower in campus, background industrial drift)
-    df['so2'] = np.clip(8.0 + 7.0 * inversion_factor + np.random.normal(0, 2.5, total_hours), 2.0, 95.0)
+    # NO2 (Nitrogen Dioxide: strictly tied to vehicular emission & transit)
+    df['no2'] = np.clip((15.0 + 38.0 * df['campus_activity_index'] * inversion_factor) + np.random.normal(0, 1.5, total_hours), 4.0, 220.0)
+    
+    # SO2 (Sulfur Dioxide: background industrial drift)
+    df['so2'] = np.clip(8.0 + 6.5 * inversion_factor + np.random.normal(0, 0.8, total_hours), 2.0, 95.0)
     
     # CO (Carbon Monoxide in mg/m3)
-    df['co'] = np.clip((0.4 + 1.6 * df['campus_activity_index'] * inversion_factor) + np.random.normal(0, 0.15, total_hours), 0.1, 8.5)
+    df['co'] = np.clip((0.4 + 1.5 * df['campus_activity_index'] * inversion_factor) + np.random.normal(0, 0.05, total_hours), 0.1, 8.5)
     
     # O3 (Ozone: photochemical byproduct, peaks with high sunlight/temperature and NO2)
     sunlight_intensity = np.clip(np.sin(np.pi * (df['hour'] - 6) / 12), 0, 1) * (df['temperature'] / 30.0)
-    df['o3'] = np.clip(10.0 + 65.0 * sunlight_intensity + np.random.normal(0, 5.0, total_hours), 2.0, 180.0)
+    df['o3'] = np.clip(10.0 + 62.0 * sunlight_intensity + np.random.normal(0, 1.5, total_hours), 2.0, 180.0)
     
     # 4. Station Metadata
     df['station_id'] = station_id
@@ -139,8 +150,8 @@ def save_default_datasets(output_dir: str = "data") -> Tuple[str, str]:
     df_raw = generate_campus_iot_dataset(
         start_date="2025-01-01 00:00:00",
         num_days=365,
-        missing_rate=0.04,  # 4% realistic IoT packet loss
-        noise_level=0.06
+        missing_rate=0.02,  # 2% realistic IoT transmission packet loss
+        noise_level=0.02
     )
     df_raw.to_csv(raw_path, index=False)
     print(f"[Dataset Generator] Successfully saved raw dataset to: {raw_path}")

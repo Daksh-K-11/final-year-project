@@ -294,24 +294,44 @@ function renderTelemetryChart(data, metricType) {
 }
 
 // Benchmark Comparison Charts
-function initBenchmarkCharts() {
+async function initBenchmarkCharts() {
     const errorCtx = document.getElementById('errorComparisonChart');
     const accCtx = document.getElementById('accuracyComparisonChart');
     if (!errorCtx || !accCtx) return;
 
-    const models = ['Linear Reg', 'Random Forest', 'LSTM', 'Transformer', 'BiLSTM-Attn'];
-    const maes = [12.45, 8.92, 6.84, 5.46, 5.12];
-    const rmses = [16.80, 12.15, 9.42, 7.65, 7.21];
-    const r2s = [0.835, 0.912, 0.942, 0.962, 0.968];
-    const accs = [81.2, 88.6, 93.4, 95.2, 96.1];
+    let models = ['Random Forest', 'HistGBDT', 'XGBoost', 'LSTM', 'Transformer', 'BiLSTM-Attn', 'Hybrid Ensemble'];
+    let maes = [4.32, 3.61, 3.59, 3.62, 4.64, 4.08, 3.61];
+    let rmses = [5.77, 4.84, 4.84, 4.69, 5.98, 5.24, 4.71];
+    let r2s = [0.9248, 0.9470, 0.9470, 0.9503, 0.9191, 0.9379, 0.9499];
+    let accs = [96.6, 97.7, 97.8, 97.2, 97.0, 96.9, 97.7];
+
+    try {
+        const res = await fetch('/api/metrics');
+        if (res.ok) {
+            const data = await res.json();
+            const keys = Object.keys(data);
+            if (keys.length > 0) {
+                models = keys.map(k => k.replace(' (Boosting)', ''));
+                maes = keys.map(k => data[k].MAE);
+                rmses = keys.map(k => data[k].RMSE);
+                r2s = keys.map(k => data[k].R2_Score);
+                accs = keys.map(k => data[k].AQI_Category_Accuracy);
+            }
+        }
+    } catch (e) {
+        console.warn('Using fallback metrics data for benchmark charts');
+    }
+
+    if (errorChartInstance) errorChartInstance.destroy();
+    if (accuracyChartInstance) accuracyChartInstance.destroy();
 
     errorChartInstance = new Chart(errorCtx, {
         type: 'bar',
         data: {
             labels: models,
             datasets: [
-                { label: 'MAE (Lower Better)', data: maes, backgroundColor: '#3b82f6' },
-                { label: 'RMSE (Lower Better)', data: rmses, backgroundColor: '#f43f5e' }
+                { label: 'MAE (Lower Better)', data: maes, backgroundColor: models.map(m => m === 'Hybrid Ensemble' ? '#e11d48' : '#3b82f6') },
+                { label: 'RMSE (Lower Better)', data: rmses, backgroundColor: models.map(m => m === 'Hybrid Ensemble' ? '#be123c' : '#f43f5e') }
             ]
         },
         options: {
@@ -330,7 +350,7 @@ function initBenchmarkCharts() {
         data: {
             labels: models,
             datasets: [
-                { label: 'Category Accuracy (%)', data: accs, backgroundColor: '#10b981', order: 2 },
+                { label: 'Category Accuracy (%)', data: accs, backgroundColor: models.map(m => m === 'Hybrid Ensemble' ? '#059669' : '#10b981'), order: 2 },
                 { label: 'R² Score (x100)', data: r2s.map(r => r * 100), type: 'line', borderColor: '#a855f7', borderWidth: 2.5, pointBackgroundColor: '#a855f7', order: 1 }
             ]
         },
@@ -340,7 +360,7 @@ function initBenchmarkCharts() {
             plugins: { legend: { labels: { color: '#9ca3af' } } },
             scales: {
                 x: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.04)' } },
-                y: { min: 70, max: 100, ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.04)' } }
+                y: { min: 90, max: 100, ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.04)' } }
             }
         }
     });
@@ -381,6 +401,22 @@ function setupPredictionLab() {
             document.getElementById('res-cat').style.color = data.color;
             document.getElementById('res-dominant').textContent = data.dominant_pollutant;
             document.getElementById('res-advisory').textContent = data.health_advisory;
+
+            // Render Ensemble Consensus & Confidence
+            const consensusBox = document.getElementById('ensemble-consensus-box');
+            const chipsContainer = document.getElementById('res-component-chips');
+            const confBadge = document.getElementById('res-confidence-badge');
+
+            if (consensusBox && data.confidence_score) {
+                consensusBox.style.display = 'block';
+                confBadge.textContent = `${(data.confidence_score * 100).toFixed(1)}% Consensus Confidence`;
+
+                if (data.component_predictions && Object.keys(data.component_predictions).length > 0) {
+                    chipsContainer.innerHTML = Object.entries(data.component_predictions)
+                        .map(([k, v]) => `<span class="badge" style="background:rgba(255,255,255,0.08); color:#cbd5e1; border: 1px solid rgba(255,255,255,0.12); padding: 3px 8px; border-radius:4px;">${k}: <strong>${v}</strong></span>`)
+                        .join('');
+                }
+            }
 
             // Render dynamic attention weights
             renderAttentionBars(data.attention_weights);

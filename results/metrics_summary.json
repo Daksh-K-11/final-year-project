@@ -1,40 +1,62 @@
 {
-    "Linear Regression": {
-        "MAE": 15.508,
-        "RMSE": 20.073,
-        "R2_Score": 0.7005,
-        "MAPE": 12.06,
-        "AQI_Category_Accuracy": 76.51
-    },
     "Random Forest": {
-        "MAE": 12.768,
-        "RMSE": 16.594,
-        "R2_Score": 0.7953,
-        "MAPE": 9.87,
-        "AQI_Category_Accuracy": 78.14
+        "MAE": 4.321,
+        "RMSE": 5.765,
+        "R2_Score": 0.9248,
+        "MAPE": 3.27,
+        "AQI_Category_Accuracy": 96.59
+    },
+    "HistGBDT (Boosting)": {
+        "MAE": 3.61,
+        "RMSE": 4.84,
+        "R2_Score": 0.947,
+        "MAPE": 2.73,
+        "AQI_Category_Accuracy": 97.67
+    },
+    "XGBoost (Boosting)": {
+        "MAE": 3.594,
+        "RMSE": 4.841,
+        "R2_Score": 0.947,
+        "MAPE": 2.72,
+        "AQI_Category_Accuracy": 97.75
     },
     "LSTM": {
-        "MAE": 12.005,
-        "RMSE": 15.582,
-        "R2_Score": 0.8195,
-        "MAPE": 9.29,
-        "AQI_Category_Accuracy": 78.06,
-        "Train_Time_Sec": 72.01
+        "MAE": 3.624,
+        "RMSE": 4.688,
+        "R2_Score": 0.9503,
+        "MAPE": 2.79,
+        "AQI_Category_Accuracy": 97.21,
+        "Train_Time_Sec": 33.71
     },
     "BiLSTM-Attention": {
-        "MAE": 12.089,
-        "RMSE": 15.801,
-        "R2_Score": 0.8144,
-        "MAPE": 9.38,
-        "AQI_Category_Accuracy": 77.75,
-        "Train_Time_Sec": 194.68
+        "MAE": 4.084,
+        "RMSE": 5.236,
+        "R2_Score": 0.9379,
+        "MAPE": 3.15,
+        "AQI_Category_Accuracy": 96.9,
+        "Train_Time_Sec": 73.7
     },
     "Transformer": {
-        "MAE": 12.836,
-        "RMSE": 16.979,
-        "R2_Score": 0.7857,
-        "MAPE": 9.95,
-        "AQI_Category_Accuracy": 78.84,
-        "Train_Time_Sec": 241.62
+        "MAE": 4.643,
+        "RMSE": 5.979,
+        "R2_Score": 0.9191,
+        "MAPE": 3.65,
+        "AQI_Category_Accuracy": 97.05,
+        "Train_Time_Sec": 105.7
+    },
+    "Hybrid Ensemble": {
+        "MAE": 3.612,
+        "RMSE": 4.705,
+        "R2_Score": 0.9499,
+        "MAPE": 2.77,
+        "AQI_Category_Accuracy": 97.67,
+        "Weights": {
+            "BiLSTM-Attention": 0.2983,
+            "Transformer": 0.0089,
+            "LSTM": 0.6788,
+            "Random Forest": 0.0,
+            "Gradient Boosting": 0.014
+        },
+        "Ensemble_Type": "Stacking Meta-Learner (RidgeCV) + Convex Blending"
     }
 }

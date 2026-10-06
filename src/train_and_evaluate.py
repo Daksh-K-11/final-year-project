@@ -24,6 +24,7 @@ from src.models.lstm_model import AirQualityLSTM
 from src.models.bilstm_model import AirQualityBiLSTMAttention
 from src.models.transformer_model import AirQualityTransformer
 from src.models.baselines import BaselineModels
+from src.models.ensemble_model import AirQualityEnsemble
 from src.aqi_calculator import categorize_aqi_value
 
 # Set styling for publication quality figures
@@ -118,10 +119,11 @@ def run_full_training_and_benchmarks(
     data_path: str = "data/campus_air_quality_raw.csv",
     results_dir: str = "results",
     models_dir: str = "saved_models",
-    epochs: int = 35
+    epochs: int = 35,
+    skip_dl_training: bool = False
 ) -> Dict[str, Any]:
     """
-    Executes full pipeline: load data -> preprocess -> train baselines & DL models ->
+    Executes full pipeline: load data -> preprocess -> train baselines, DL models & Hybrid Ensemble ->
     generate metrics & plots -> save artifacts.
     """
     os.makedirs(results_dir, exist_ok=True)
@@ -206,15 +208,22 @@ def run_full_training_and_benchmarks(
     attention_weights_sample = None
     
     for model_name, model in dl_models.items():
-        print(f"\n--- Training {model_name} ({epochs} epochs) ---")
-        start_t = time.time()
-        trained_model, history = train_torch_model(model, train_loader, val_loader, epochs=epochs, device=device)
-        train_duration = round(time.time() - start_t, 2)
-        histories[model_name] = history
-        
-        # Save model checkpoint
         ckpt_path = os.path.join(models_dir, f"{model_name.lower().replace('-', '_')}_best.pt")
-        torch.save(trained_model.state_dict(), ckpt_path)
+        
+        if skip_dl_training and os.path.exists(ckpt_path):
+            print(f"\n--- Loading Checkpoint for {model_name} from {ckpt_path} ---")
+            model.load_state_dict(torch.load(ckpt_path, map_location=device))
+            trained_model = model.to(device)
+            train_duration = 0.0
+        else:
+            print(f"\n--- Training {model_name} ({epochs} epochs) ---")
+            start_t = time.time()
+            trained_model, history = train_torch_model(model, train_loader, val_loader, epochs=epochs, device=device)
+            train_duration = round(time.time() - start_t, 2)
+            histories[model_name] = history
+            
+            # Save model checkpoint
+            torch.save(trained_model.state_dict(), ckpt_path)
         
         # Predict on Test Set
         trained_model.eval()
@@ -247,9 +256,55 @@ def run_full_training_and_benchmarks(
             'Train_Time_Sec': train_duration
         }
         predictions_dict[model_name] = preds_actual.tolist()
-        print(f"[{model_name}] MAE: {mae:.2f} | RMSE: {rmse:.2f} | R2: {r2:.4f} | MAPE: {mape:.2f}% | Acc: {acc:.1f}% | Time: {train_duration}s")
+        print(f"[{model_name}] MAE: {mae:.2f} | RMSE: {rmse:.2f} | R2: {r2:.4f} | MAPE: {mape:.2f}% | Acc: {acc:.1f}%")
 
-    # 5. Save Metrics Summary
+    # 5. Build, Fit, and Benchmark Hybrid Multi-Model Ensemble
+    print("\n--- Fitting Hybrid Multi-Model Ensemble (Stacking & Adaptive Blending) ---")
+    ensemble = AirQualityEnsemble(input_dim=input_dim)
+    ensemble.bilstm = dl_models['BiLSTM-Attention']
+    ensemble.transformer = dl_models['Transformer']
+    ensemble.lstm = dl_models['LSTM']
+    ensemble.set_rf_model(baselines.rf_model)
+    boosting_model = getattr(baselines, 'xgb_model', None) or getattr(baselines, 'hgb_model', None)
+    if boosting_model is not None:
+        ensemble.set_boosting_model(boosting_model)
+    
+    # Fit meta-learner and optimal weights on validation sequence split
+    opt_weights = ensemble.fit_meta_learner(X_va_seq, y_va_seq, device=device)
+    print(f"[Ensemble Optimizer] Learned Optimal Convex Weights: {opt_weights}")
+    
+    # Save ensemble configuration and metadata
+    ensemble_cfg_path = os.path.join(models_dir, "ensemble_config.json")
+    ensemble.save(ensemble_cfg_path)
+
+    
+    # Predict on test set using Stacking Meta-Learner
+    ens_preds_scaled, ens_meta = ensemble.predict(
+        torch.tensor(X_te_seq, dtype=torch.float32),
+        mode="stacking",
+        device=device
+    )
+    ens_preds_actual = preprocessor.inverse_transform_target(ens_preds_scaled.reshape(-1, 1)).flatten()
+    
+    mae_ens = mean_absolute_error(y_test_actual, ens_preds_actual)
+    rmse_ens = np.sqrt(mean_squared_error(y_test_actual, ens_preds_actual))
+    r2_ens = r2_score(y_test_actual, ens_preds_actual)
+    mape_ens = compute_mape(y_test_actual, ens_preds_actual)
+    acc_ens = compute_aqi_classification_accuracy(y_test_actual, ens_preds_actual)
+    
+    all_metrics['Hybrid Ensemble'] = {
+        'MAE': round(float(mae_ens), 3),
+        'RMSE': round(float(rmse_ens), 3),
+        'R2_Score': round(float(r2_ens), 4),
+        'MAPE': mape_ens,
+        'AQI_Category_Accuracy': acc_ens,
+        'Weights': opt_weights,
+        'Ensemble_Type': 'Stacking Meta-Learner (RidgeCV) + Convex Blending'
+    }
+    predictions_dict['Hybrid Ensemble'] = ens_preds_actual.tolist()
+    print(f"[Hybrid Ensemble] MAE: {mae_ens:.2f} | RMSE: {rmse_ens:.2f} | R2: {r2_ens:.4f} | MAPE: {mape_ens:.2f}% | Acc: {acc_ens:.1f}%")
+
+    # 6. Save Metrics Summary & Sample Predictions
     summary_path = os.path.join(results_dir, "metrics_summary.json")
     with open(summary_path, 'w') as f:
         json.dump(all_metrics, f, indent=4)
@@ -259,15 +314,15 @@ def run_full_training_and_benchmarks(
         sample_out = {k: v[:200] for k, v in predictions_dict.items()}
         json.dump(sample_out, f, indent=4)
 
-    # 6. Generate Figures & Academic Charts
-    generate_all_plots(histories, predictions_dict, all_metrics, attention_weights_sample, results_dir)
+    # 7. Generate Figures & Academic Charts
+    generate_all_plots(histories, predictions_dict, all_metrics, attention_weights_sample, results_dir, opt_weights)
     
     print(f"\n[Training Engine] Training and benchmark suite completed successfully.")
-    print(f"Results and charts saved to: {results_dir}")
+    print(f"Results, model checkpoints, and charts saved to: {results_dir}")
     return all_metrics
 
-def generate_all_plots(histories, predictions_dict, all_metrics, attention_weights, results_dir):
-    """Generates publication-quality figures for First Review report and slides."""
+def generate_all_plots(histories, predictions_dict, all_metrics, attention_weights, results_dir, opt_weights=None):
+    """Generates publication-quality figures for First Review report, paper, and slides."""
     
     # 1. Training and Validation Loss Curves
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -297,16 +352,19 @@ def generate_all_plots(histories, predictions_dict, all_metrics, attention_weigh
     plt.plot(gt, label='Actual AQI (Ground Truth)', color='#111111', linewidth=2.8, zorder=5)
     
     model_plot_styles = {
-        'Linear Regression': ('#999999', ':', 1.5),
         'Random Forest': ('#ff7f0e', '--', 1.8),
+        'HistGBDT (Boosting)': ('#0ea5e9', '--', 1.8),
+        'XGBoost (Boosting)': ('#8b5cf6', ':', 1.8),
         'LSTM': ('#1f77b4', '-.', 2.0),
+        'Transformer': ('#9467bd', '--', 2.0),
         'BiLSTM-Attention': ('#2ca02c', '-', 2.2),
-        'Transformer': ('#9467bd', '-', 2.2)
+        'Hybrid Ensemble': ('#e11d48', '-', 2.8)
     }
     
     for model_name, (col, ls, lw) in model_plot_styles.items():
         if model_name in predictions_dict:
-            plt.plot(predictions_dict[model_name][:window], label=model_name, color=col, linestyle=ls, linewidth=lw)
+            z_order = 6 if model_name == 'Hybrid Ensemble' else 3
+            plt.plot(predictions_dict[model_name][:window], label=model_name, color=col, linestyle=ls, linewidth=lw, zorder=z_order)
             
     # Add AQI severity background shading
     plt.axhspan(0, 50, color='#00E400', alpha=0.08, label='Good (0-50)')
@@ -314,10 +372,10 @@ def generate_all_plots(histories, predictions_dict, all_metrics, attention_weigh
     plt.axhspan(101, 200, color='#FF7E00', alpha=0.08, label='Moderate (101-200)')
     plt.axhspan(201, 300, color='#FF0000', alpha=0.08, label='Poor (201-300)')
     
-    plt.title("Multi-Model Air Quality Index (AQI) Forecasting vs Ground Truth (120-Hour Test Horizon)", fontsize=14, fontweight='bold')
+    plt.title("Multi-Model Air Quality Index (AQI) Forecasting vs Ground Truth (120-Hour Horizon)", fontsize=14, fontweight='bold')
     plt.xlabel("Time Horizon (Hours)", fontsize=12)
     plt.ylabel("Air Quality Index (AQI)", fontsize=12)
-    plt.legend(loc='upper right', bbox_to_anchor=(1.18, 1.02), frameon=True, fontsize=10)
+    plt.legend(loc='upper right', bbox_to_anchor=(1.20, 1.02), frameon=True, fontsize=10)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, "predictions_vs_actual.png"), dpi=300)
@@ -335,8 +393,8 @@ def generate_all_plots(histories, predictions_dict, all_metrics, attention_weigh
     w = 0.35
     
     # Error metrics (lower is better)
-    ax1.bar(x - w/2, maes, width=w, label='MAE (Lower Better)', color='#4c72b0')
-    ax1.bar(x + w/2, rmses, width=w, label='RMSE (Lower Better)', color='#c44e52')
+    b1 = ax1.bar(x - w/2, maes, width=w, label='MAE (Lower Better)', color='#4c72b0')
+    b2 = ax1.bar(x + w/2, rmses, width=w, label='RMSE (Lower Better)', color='#c44e52')
     ax1.set_xticks(x)
     ax1.set_xticklabels(models, rotation=20, ha='right', fontweight='bold')
     ax1.set_ylabel("Error Score (AQI Points)", fontsize=12)
@@ -362,7 +420,6 @@ def generate_all_plots(histories, predictions_dict, all_metrics, attention_weigh
     # 4. Temporal Attention Heatmap
     if attention_weights is not None:
         plt.figure(figsize=(12, 5))
-        # average attention across first 20 test sequences
         attn_avg = np.mean(attention_weights[:20, :, 0], axis=0)
         time_steps = [f"t - {24 - i}h" for i in range(24)]
         
@@ -373,6 +430,42 @@ def generate_all_plots(histories, predictions_dict, all_metrics, attention_weigh
         plt.ylabel("Normalized Attention Weight", fontsize=11)
         plt.tight_layout()
         plt.savefig(os.path.join(results_dir, "attention_heatmap.png"), dpi=300)
+        plt.close()
+
+    # 5. Hybrid Ensemble Weights & Variance Reduction Breakdown
+    if opt_weights is not None:
+        fig, (e_ax1, e_ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        
+        # Left: Optimal Convex Combination Allocation
+        keys = list(opt_weights.keys())
+        w_vals = [opt_weights[k] * 100.0 for k in keys]
+        colors_pie = ['#2ca02c', '#9467bd', '#1f77b4', '#ff7f0e', '#0ea5e9', '#8b5cf6']
+        
+        bars = e_ax1.bar(keys, w_vals, color=colors_pie[:len(keys)], edgecolor='black', linewidth=1.2, width=0.5)
+        for bar in bars:
+            h = bar.get_height()
+            e_ax1.text(bar.get_x() + bar.get_width() / 2., h + 1.0, f'{h:.1f}%', ha='center', va='bottom', fontweight='bold')
+        e_ax1.set_ylim(0, max(w_vals) + 15)
+        e_ax1.set_title("Optimal Ensemble Weight Contribution (%)", fontsize=13, fontweight='bold')
+        e_ax1.set_ylabel("Normalized Convex Weight (%)", fontsize=11)
+        e_ax1.grid(True, alpha=0.3)
+        
+        # Right: MAE Comparison showing Ensemble Superiority
+        comp_models = [m for m in ['Random Forest', 'HistGBDT (Boosting)', 'XGBoost (Boosting)', 'LSTM', 'Transformer', 'BiLSTM-Attention', 'Hybrid Ensemble'] if m in all_metrics]
+        comp_maes = [all_metrics[m]['MAE'] for m in comp_models]
+        comp_colors = ['#ff7f0e', '#0ea5e9', '#8b5cf6', '#1f77b4', '#9467bd', '#2ca02c', '#e11d48']
+        
+        b_mae = e_ax2.barh(comp_models, comp_maes, color=comp_colors[:len(comp_models)], edgecolor='black', linewidth=1.1)
+        for bar in b_mae:
+            w_val = bar.get_width()
+            e_ax2.text(w_val + 0.2, bar.get_y() + bar.get_height() / 2., f'{w_val:.2f}', ha='left', va='center', fontweight='bold')
+        e_ax2.set_xlim(0, max(comp_maes) + 2.5)
+        e_ax2.set_title("Mean Absolute Error (MAE) Comparison — Ensemble vs Individual Models", fontsize=13, fontweight='bold')
+        e_ax2.set_xlabel("MAE (Lower is Better)", fontsize=11)
+        e_ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(results_dir, "ensemble_weights_distribution.png"), dpi=300)
         plt.close()
 
 if __name__ == "__main__":

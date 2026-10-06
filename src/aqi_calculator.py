@@ -62,12 +62,12 @@ CPCB_BREAKPOINTS = {
 }
 
 AQI_CATEGORIES = [
-    (0, 50, "Good", "#00E400", "Minimal health impact. Air quality is considered satisfactory."),
-    (51, 100, "Satisfactory", "#FFFF00", "Minor breathing discomfort to sensitive people."),
-    (101, 200, "Moderate", "#FF7E00", "Breathing discomfort to people with lungs, asthma and heart diseases."),
-    (201, 300, "Poor", "#FF0000", "Breathing discomfort to most people on prolonged exposure."),
-    (301, 400, "Very Poor", "#8f3f97", "Respiratory illness on prolonged exposure. Significant effects on vulnerable groups."),
-    (401, 500, "Severe", "#7e0023", "Affects healthy people and seriously impacts those with existing diseases.")
+    (0.0, 50.0, "Good", "#00E400", "Minimal health impact. Air quality is considered satisfactory."),
+    (50.0, 100.0, "Satisfactory", "#FFFF00", "Minor breathing discomfort to sensitive people."),
+    (100.0, 200.0, "Moderate", "#FF7E00", "Breathing discomfort to people with lungs, asthma and heart diseases."),
+    (200.0, 300.0, "Poor", "#FF0000", "Breathing discomfort to most people on prolonged exposure."),
+    (300.0, 400.0, "Very Poor", "#8f3f97", "Respiratory illness on prolonged exposure. Significant effects on vulnerable groups."),
+    (400.0, 500.0, "Severe", "#7e0023", "Affects healthy people and seriously impacts those with existing diseases.")
 ]
 
 
